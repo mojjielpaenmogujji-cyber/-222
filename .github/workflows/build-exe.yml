@@ -1,0 +1,149 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build Web & Package Electron EXE
+        shell: bash
+        run: |
+          mkdir -p src
+          
+          # 업로드한 소스코드 파일을 React 메인 컴포넌트로 지정
+          if [ -f "lyrics-archive-desktop.jsx" ]; then
+            cp "lyrics-archive-desktop.jsx" src/App.jsx
+          elif [ -f "가사 보관함.jsx" ]; then
+            cp "가사 보관함.jsx" src/App.jsx
+          else
+            cp "$(ls *.jsx | head -n 1)" src/App.jsx
+          fi
+
+          # 패키지 설정 (Electron 포함)
+          cat << 'EOF' > package.json
+          {
+            "name": "lyrics-archive-desktop",
+            "private": true,
+            "version": "1.0.0",
+            "main": "main.js",
+            "scripts": {
+              "build": "vite build"
+            },
+            "dependencies": {
+              "react": "^18.3.1",
+              "react-dom": "^18.3.1",
+              "lucide-react": "^0.469.0"
+            },
+            "devDependencies": {
+              "@vitejs/plugin-react": "^4.3.4",
+              "electron": "^33.0.0",
+              "electron-builder": "^25.1.8",
+              "vite": "^6.0.0"
+            },
+            "build": {
+              "appId": "com.lyrics.archive.desktop",
+              "productName": "가사 보관함",
+              "win": {
+                "target": ["nsis"],
+                "icon": "icon.png"
+              },
+              "directories": {
+                "output": "release"
+              }
+            }
+          }
+          EOF
+
+          # Vite 설정
+          cat << 'EOF' > vite.config.js
+          import { defineConfig } from 'vite'
+          import react from '@vitejs/plugin-react'
+          export default defineConfig({
+            plugins: [react()],
+            base: './'
+          })
+          EOF
+
+          # HTML 설정
+          cat << 'EOF' > index.html
+          <!DOCTYPE html>
+          <html lang="ko">
+            <head>
+              <meta charset="UTF-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+              <title>가사 보관함</title>
+            </head>
+            <body style="margin:0; background:#000;">
+              <div id="root"></div>
+              <script type="module" src="/src/main.jsx"></script>
+            </body>
+          </html>
+          EOF
+
+          # 메인 JSX 설정 및 window.storage 보완[cite: 2]
+          cat << 'EOF' > src/main.jsx
+          import React from 'react'
+          import ReactDOM from 'react-dom/client'
+          import App from './App.jsx'
+
+          if (!window.storage) {
+            window.storage = {
+              get: async (key) => ({ value: localStorage.getItem(key) }),
+              set: async (key, val) => { localStorage.setItem(key, val); }
+            };
+          }
+
+          ReactDOM.createRoot(document.getElementById('root')).render(
+            <React.StrictMode>
+              <App />
+            </React.StrictMode>,
+          )
+          EOF
+
+          # 일렉트론 구동 파일 (main.js) 생성
+          cat << 'EOF' > main.js
+          const { app, BrowserWindow } = require('electron')
+          const path = require('path')
+
+          function createWindow () {
+            const win = new BrowserWindow({
+              width: 1000,
+              height: 700,
+              autoHideMenuBar: true,
+              webPreferences: {
+                nodeIntegration: true,
+                contextIsolation: false
+              }
+            })
+            win.loadURL(`file://${path.join(__dirname, 'dist/index.html')}`)
+          }
+
+          app.whenReady().then(createWindow)
+          app.on('window-all-closed', () => {
+            if (process.platform !== 'darwin') app.quit()
+          })
+          EOF
+
+          # 패키지 설치 및 빌드 후 .exe 추출 (--publish never로 토큰 에러 원천 차단)
+          npm install
+          npm run build
+          npx electron-builder --win --publish never
+
+      - name: Upload EXE Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LyricsArchive-Windows-EXE
+          path: release/*.exe
