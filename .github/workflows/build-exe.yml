@@ -23,8 +23,10 @@ jobs:
         run: |
           mkdir -p src
           
-          # 업로드한 소스코드 파일을 React 메인 컴포넌트로 지정
-          if [ -f "lyrics-archive-desktop.jsx" ]; then
+          # 업로드된 v2 소스코드 파일을 React 메인 컴포넌트로 복사
+          if [ -f "lyrics-archive-desktop(1).jsx" ]; then
+            cp "lyrics-archive-desktop(1).jsx" src/App.jsx
+          elif [ -f "lyrics-archive-desktop.jsx" ]; then
             cp "lyrics-archive-desktop.jsx" src/App.jsx
           elif [ -f "가사 보관함.jsx" ]; then
             cp "가사 보관함.jsx" src/App.jsx
@@ -32,12 +34,12 @@ jobs:
             cp "$(ls *.jsx | head -n 1)" src/App.jsx
           fi
 
-          # 패키지 설정 (Electron 포함)
+          # 패키지 설정 (버전 2.0.0 적용)
           cat << 'EOF' > package.json
           {
             "name": "lyrics-archive-desktop",
             "private": true,
-            "version": "1.0.0",
+            "version": "2.0.0",
             "main": "main.js",
             "scripts": {
               "build": "vite build"
@@ -93,7 +95,7 @@ jobs:
           </html>
           EOF
 
-          # 메인 JSX 설정 및 window.storage 보완[cite: 2]
+          # 메인 JSX 설정 및 window.storage 보완[cite: 3]
           cat << 'EOF' > src/main.jsx
           import React from 'react'
           import ReactDOM from 'react-dom/client'
@@ -137,7 +139,7 @@ jobs:
           })
           EOF
 
-          # 패키지 설치 및 빌드 후 .exe 추출 (--publish never로 토큰 에러 원천 차단)
+          # 패키지 설치 및 빌드 후 .exe 추출 (버전 2.0.0)
           npm install
           npm run build
           npx electron-builder --win --publish never
@@ -145,5 +147,5 @@ jobs:
       - name: Upload EXE Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LyricsArchive-Windows-EXE
+          name: LyricsArchive-Windows-EXE-v2.0.0
           path: release/*.exe
