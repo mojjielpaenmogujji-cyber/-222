@@ -1,0 +1,160 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: |
+          npm install -g pnpm
+
+      - name: Create Web App Package
+        run: |
+          mkdir -p src public
+          if [ -f "가사 보관함.jsx" ]; then
+            cp "가사 보관함.jsx" src/App.jsx
+          elif [ -f "lyrics-archive.jsx" ]; then
+            cp "lyrics-archive.jsx" src/App.jsx
+          else
+            cp "$(ls *.jsx | head -n 1)" src/App.jsx
+          fi
+
+          cat << 'EOF' > package.json
+          {
+            "name": "lyrics-archive-app",
+            "private": true,
+            "version": "3.0.1",
+            "type": "module",
+            "scripts": {
+              "build": "vite build"
+            },
+            "dependencies": {
+              "react": "^18.3.1",
+              "react-dom": "^18.3.1",
+              "lucide-react": "^0.469.0"
+            },
+            "devDependencies": {
+              "@vitejs/plugin-react": "^4.3.4",
+              "vite": "^6.0.0"
+            }
+          }
+          EOF
+
+          cat << 'EOF' > vite.config.js
+          import { defineConfig } from 'vite'
+          import react from '@vitejs/plugin-react'
+          export default defineConfig({
+            plugins: [react()],
+          })
+          EOF
+
+          cat << 'EOF' > index.html
+          <!DOCTYPE html>
+          <html lang="ko">
+            <head>
+              <meta charset="UTF-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover" />
+              <title>가사 보관함</title>
+            </head>
+            <body style="margin:0; background:#000;">
+              <div id="root"></div>
+              <script type="module" src="/src/main.jsx"></script>
+            </body>
+          </html>
+          EOF
+
+          cat << 'EOF' > src/main.jsx
+          import React from 'react'
+          import ReactDOM from 'react-dom/client'
+          import App from './App.jsx'
+
+          if (!window.storage) {
+            window.storage = {
+              get: async (key) => ({ value: localStorage.getItem(key) }),
+              set: async (key, val) => { localStorage.setItem(key, val); }
+            };
+          }
+
+          ReactDOM.createRoot(document.getElementById('root')).render(
+            <React.StrictMode>
+              <App />
+            </React.StrictMode>,
+          )
+          EOF
+
+          npm install
+          npm run build
+
+      - name: Setup Capacitor
+        run: |
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npx cap init "가사 보관함" "com.lyrics.archive" --web-dir dist
+          npx cap add android
+
+      # --- [핵심 수정: 충돌하는 anydpi 폴더 삭제 및 아이콘 강제 주입] ---
+      - name: Force Apply App Icon
+        run: |
+          if [ -f "icon.png" ]; then
+            RES_DIR="android/app/src/main/res"
+            
+            # 중복 리소스 에러(Duplicate resources)를 일으키는 주범 폴더를 통째로 삭제
+            rm -rf $RES_DIR/mipmap-anydpi-v26
+            
+            # 각 해상도 폴더에 아이콘 강제 교체
+            for dir in $RES_DIR/mipmap-*; do
+              if [ -d "$dir" ]; then
+                rm -f "$dir/ic_launcher.png"
+                rm -f "$dir/ic_launcher_round.png"
+                cp icon.png "$dir/ic_launcher.png"
+                cp icon.png "$dir/ic_launcher_round.png"
+              fi
+            done
+            
+            # AndroidManifest.xml 설정 정리
+            sed -i 's/android:roundIcon="@mipmap\/ic_launcher_round"//g' android/app/src/main/AndroidManifest.xml
+            
+            echo "아이콘 충돌 해결 및 강제 적용 완료!"
+          else
+            echo "경고: root에 icon.png가 없습니다!"
+          fi
+      # ------------------------------------------------------------------
+
+      - name: Sync Capacitor
+        run: |
+          npx cap sync
+
+      - name: Fix Kotlin Version Conflict
+        run: |
+          echo "configurations.all { resolutionStrategy.force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22', 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22', 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22' }" >> android/app/build.gradle
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '24'
+
+      - name: Build Android APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LyricsArchive-App
+          path: android/app/build/outputs/apk/debug/app-debug.apk
