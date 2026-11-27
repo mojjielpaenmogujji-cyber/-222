@@ -1,0 +1,161 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java (JDK 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Prepare Android SDK & Licenses
+        shell: bash
+        run: |
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/cmdline-tools/tools/bin:$ANDROID_HOME/platform-tools:$PATH"
+
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/cmdline-tools/tools/bin:$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
+          if command -v sdkmanager >/dev/null 2>&1; then
+            yes | sdkmanager --licenses > /dev/null || true
+          else
+            echo "sdkmanager not found in PATH"
+            ls -la "$ANDROID_HOME" || true
+            exit 1
+          fi
+
+      - name: Build Web & Sync Capacitor
+        shell: bash
+        run: |
+          mkdir -p src public
+
+          if [ -f "src/App.jsx" ]; then
+            echo "Using existing src/App.jsx"
+          elif [ -f "가사 보관함.jsx" ]; then
+            cp "가사 보관함.jsx" src/App.jsx
+          elif [ -f "lyrics-archive-desktop(3.0.0).jsx" ]; then
+            cp "lyrics-archive-desktop(3.0.0).jsx" src/App.jsx
+          else
+            FIRST_JSX="$(find . -maxdepth 2 -name '*.jsx' ! -path './node_modules/*' | head -n 1)"
+            if [ -z "$FIRST_JSX" ]; then
+              echo "JSX 파일을 찾지 못했어요."
+              exit 1
+            fi
+            cp "$FIRST_JSX" src/App.jsx
+          fi
+
+          if [ -f "icon.png" ]; then
+            cp "icon.png" public/icon.png
+          fi
+
+          cat << 'EOF' > package.json
+          {
+            "name": "lyrics-archive-app",
+            "private": true,
+            "version": "3.0.0",
+            "scripts": {
+              "build": "vite build"
+            },
+            "dependencies": {
+              "@capacitor/android": "^6.1.2",
+              "@capacitor/core": "^6.1.2",
+              "lucide-react": "^0.469.0",
+              "react": "^18.3.1",
+              "react-dom": "^18.3.1"
+            },
+            "devDependencies": {
+              "@capacitor/cli": "^6.1.2",
+              "@vitejs/plugin-react": "^4.3.4",
+              "vite": "^6.0.0"
+            }
+          }
+          EOF
+
+          cat << 'EOF' > vite.config.js
+          import { defineConfig } from 'vite'
+          import react from '@vitejs/plugin-react'
+
+          export default defineConfig({
+            plugins: [react()],
+            base: './'
+          })
+          EOF
+
+          cat << 'EOF' > index.html
+          <!DOCTYPE html>
+          <html lang="ko">
+            <head>
+              <meta charset="UTF-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+              <title>가사 보관함</title>
+            </head>
+            <body style="margin:0; background:#000;">
+              <div id="root"></div>
+              <script type="module" src="/src/main.jsx"></script>
+            </body>
+          </html>
+          EOF
+
+          cat << 'EOF' > src/main.jsx
+          import React from 'react'
+          import ReactDOM from 'react-dom/client'
+          import App from './App.jsx'
+
+          if (!window.storage) {
+            window.storage = {
+              get: async (key) => ({ value: localStorage.getItem(key) }),
+              set: async (key, val) => { localStorage.setItem(key, val); }
+            }
+          }
+
+          ReactDOM.createRoot(document.getElementById('root')).render(
+            <React.StrictMode>
+              <App />
+            </React.StrictMode>,
+          )
+          EOF
+
+          cat << 'EOF' > capacitor.config.json
+          {
+            "appId": "com.lyrics.archive.app",
+            "appName": "가사 보관함",
+            "webDir": "dist",
+            "server": {
+              "androidScheme": "https"
+            }
+          }
+          EOF
+
+          npm install
+          npm run build
+          npx cap add android
+          npx cap sync android
+
+      - name: Build Debug APK
+        working-directory: android
+        run: chmod +x gradlew && ./gradlew assembleDebug
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LyricsArchive-Android-APK-v3.0.0
+          path: android/app/build/outputs/apk/debug/app-debug.apk
